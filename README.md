@@ -26,7 +26,7 @@ source venv_ip/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
+## Usage
 
 ### Parameter Inference
 `01_parameter_inference.ipynb` contains a step-by-step procedure for inferring parameters (using NNLS) and mean data fits (using PNAS polynomial method) from the data in `/data/Data_cell_types_small_size.mat`, based on a number of options (fitting assumptions, priors, etc). 
@@ -51,6 +51,6 @@ open-source (MIT license)
 ## Contact
 luke.johnston00@gmail.com
 
-## upcoming changes
+## Upcoming changes
 -improved docs
 -hopf analysis notebook
