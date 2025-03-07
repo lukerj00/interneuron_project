@@ -45,6 +45,8 @@ Final part features phase space simulations of system, projected along 2 of 4 po
 
 Also contains visualisations of various analytics when system is driven by external inputs which are interpolated between an 'initial' and 'final' vector.
 
+Final part contains hopf analysis - suggesting possible hopf bifurcations based on curve fit to steady state amplitude against parameter variation.
+
 ## License
 open-source (MIT license)
 
