@@ -52,7 +52,7 @@ def plot_data_EPSV(c_range, means, sems, savefig=False):
     leg = plt.legend(fontsize=fs, loc='upper left', frameon=False, bbox_to_anchor=(1.02, 0.75))
 
     for legobj in leg.get_lines():
-        legobj.set_linewidth(2.0)
+        legobj.set_linewidth(2)
     
     plt.show()
 

@@ -16,7 +16,16 @@ def get_params(r_fp, W, TAU, tau_noise, sigma_noise, init_perturb_mag, dt, varia
     SIGMA_noise = sigma_noise*np.eye(d) # std
     v0 = init_perturb_mag*np.random.uniform(-1, 1, size=d)
 
-    if variable == 'voltage' and noise_type == 'white':
+    if variable == 'voltage' and noise_type == 'none':
+        A_00 = S
+        A_01 = np.zeros((d,d))
+        A_10 = np.zeros((d,d))
+        A_11 = np.zeros((d,d))
+        A = np.block([[A_00, A_01], [A_10, A_11]])
+        B = np.block([[np.zeros((d,d)), np.zeros((d,d))], [np.zeros((d,d)), np.zeros((d,d))]])
+        x0 = np.concatenate([v0, np.zeros(d)])
+
+    elif variable == 'voltage' and noise_type == 'white':
         A_00 = S
         A_01 = np.zeros((d,d))
         A_10 = np.zeros((d,d))
@@ -35,6 +44,15 @@ def get_params(r_fp, W, TAU, tau_noise, sigma_noise, init_perturb_mag, dt, varia
         B = np.block([[np.zeros((d,d)), np.zeros((d,d))], [np.zeros((d,d)), np.sqrt(2/tau_noise)*SIGMA_noise]])
         eta0 = np.random.multivariate_normal(mean=np.zeros(d), cov=(2/tau_noise)*SIGMA_noise**2*dt)
         x0 = np.concatenate([v0, eta0])
+
+    elif variable == 'rate' and noise_type == 'none':
+        A_00 = S
+        A_01 = np.zeros((d,d))
+        A_10 = np.zeros((d,d))
+        A_11 = np.zeros((d,d))
+        A = np.block([[A_00, A_01], [A_10, A_11]])
+        B = np.block([[np.zeros((d,d)), np.zeros((d,d))], [np.zeros((d,d)), np.zeros((d,d))]])
+        x0 = np.concatenate([r_fp, np.zeros(d)])
 
     elif variable == 'rate' and noise_type == 'OU':
         A_00 = S
@@ -60,8 +78,8 @@ def sim_local(r_fp, init_perturb, W, h_tot, A, B, variable, noise_type, T_sim=10
     x_trajectory[0] = x
     blown_up = False
     
-    if noise_type not in ['white', 'OU']:
-        raise ValueError('invalid noise type, must be "white" or "OU"')
+    if noise_type not in ['none', 'white', 'OU']:
+        raise ValueError('invalid noise type, must be "none", "white" or "OU"')
     
     for t in range(1, tot_steps):
         if blown_up:

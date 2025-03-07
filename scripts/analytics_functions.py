@@ -22,7 +22,7 @@ def get_gain_stab_cov_heatmap_combined(fit_c, W, h1, h0, contrast, pop1_idx, pop
 
     pop_range = np.linspace(lims[0], lims[1], points)
     
-    stability_arr = np.full((points, points, 4), np.nan)
+    stability_arr = np.full((points, points,4), np.nan)
     gain_arr = np.full((points, points, 4), np.nan)
     real_ev_arr = np.full((points, points), np.nan)
     imag_ev_arr = np.full((points, points), np.nan)
@@ -2095,3 +2095,306 @@ def interp_zero_crossings(arr, x, y):
                 crossings_x.append(x[j])
                 crossings_y.append(y_interp)
     return crossings_x, crossings_y
+
+def fit_amplitude_curves(freq_arr, amp_arr, h_ext_lower, h_ext_upper, points, 
+                         amplitude_threshold=5e-3, min_points_after_start=5, r_squared_threshold=0.9, savefig=False):
+    h_ext_range = np.linspace(np.linalg.norm(h_ext_lower), np.linalg.norm(h_ext_upper), points)
+    start_idx = None
+    for i in range(len(h_ext_range)):
+        if any(freq_arr[i] > 0):
+            start_idx = max(0, i - 1)
+            break
+
+    if start_idx is None:
+        print("no oscillations detected, cannot fit")
+        return None
+    
+    end_idx = None
+    amp_derivatives = np.diff(amp_arr, axis=0)
+    amp_second_derivatives = np.diff(amp_derivatives, axis=0)
+    
+    search_start = start_idx + min_points_after_start
+    if search_start < len(amp_second_derivatives):
+        for i in range(search_start, len(amp_second_derivatives)):
+            if any(amp_second_derivatives[i] < 0) and any(amp_second_derivatives[i-1] > 0):
+                end_idx = i - 1
+                break
+
+    if end_idx is None:
+        end_idx = len(h_ext_range) - 1
+
+    # print(f"first oscillation detected at index {start_idx+1}, starting fit at index {start_idx}")
+    # print(f"ending fit at index {end_idx} (param value = {h_ext_range[end_idx]:.4f})")
+    
+    def sqrt_fit_func(x, k, x_c):
+        result = np.zeros_like(x)
+        mask = x > x_c
+        if np.any(mask):
+            result[mask] = k * np.sqrt(x[mask] - x_c)
+        return result
+    
+    fit_results = {
+        'params': [],             
+        'r_squared': [],          
+        'x_range': (h_ext_range[start_idx], h_ext_range[end_idx]),
+        'start_idx': start_idx,   
+        'end_idx': end_idx,       
+        'is_supercrit': []     
+    }
+    
+    for i in range(4):
+        x_fit = h_ext_range[start_idx:end_idx+1]
+        y_fit = amp_arr[start_idx:end_idx+1, i]
+        try:
+            if not np.any(np.isnan(y_fit)) and (np.max(y_fit) - np.min(y_fit)) > amplitude_threshold:
+                x_c_guess = h_ext_range[start_idx]
+                k_guess = y_fit[-1] / np.sqrt(x_fit[-1] - x_c_guess + 1e-10)
+                p0 = (k_guess, x_c_guess)
+                bounds = (
+                    [0, h_ext_range[max(0, start_idx-3)]], 
+                    [np.inf, h_ext_range[min(len(h_ext_range)-1, start_idx+3)]] 
+                )
+                try:
+                    popt, pcov = scipy.optimize.curve_fit(
+                        sqrt_fit_func, x_fit, y_fit,
+                        p0=p0, bounds=bounds, maxfev=10000
+                    )
+                    k, x_c = popt
+                    y_pred = sqrt_fit_func(x_fit, k, x_c)
+                    ss_tot = np.sum((y_fit - np.mean(y_fit))**2)
+                    ss_res = np.sum((y_fit - y_pred)**2)
+                    r_squared = 1 - (ss_res / (ss_tot + 1e-10))
+                    
+                    fit_results['params'].append((k, x_c))
+                    fit_results['r_squared'].append(r_squared)
+                    is_supercrit = r_squared >= r_squared_threshold
+                    fit_results['is_supercrit'].append(is_supercrit)
+                except Exception as e:
+                    print(f"sqrt fit failed for pop {i}: {e}")
+                    fit_results['params'].append(None)
+                    fit_results['r_squared'].append(None)
+                    fit_results['is_supercrit'].append(None)
+            else:
+                fit_results['params'].append(None)
+                fit_results['r_squared'].append(None)
+                fit_results['is_supercrit'].append(None)
+        except Exception as e:
+            print(f"fitting failed for pop {i}: {e}")
+            fit_results['params'].append(None)
+            fit_results['r_squared'].append(None)
+            fit_results['is_supercrit'].append(None)
+    
+    if fit_results:
+        pop_labels = ['E','P', 'S', 'V']
+        
+        print("\n curves fit to eqn: y = k*sqrt(x - x_c)")
+        print(f"  R² >= {r_squared_threshold}: good fit; likely supercritical hopf")
+        print(f"  R² < {r_squared_threshold}: poor fit; possible subcritical hopf")
+        print("\n population | k (scaling) | x_c (bifurc point) | R² (fit) | bifurcation type")
+        print("-" * 80)
+        for i in range(4):
+            if fit_results['params'][i] is not None:
+                k, x_c = fit_results['params'][i]
+                r_squared = fit_results['r_squared'][i]
+                is_super = fit_results['is_supercrit'][i]
+                bif_type = "likely supercritical" if is_super else "liekly subcritical"
+                print(f"{pop_labels[i]}          | k={k:8.4f} | x_c={x_c:8.4f} | {r_squared:6.4f} | {bif_type} Hopf")
+            else:
+                print(f"{pop_labels[i]}          | --- | --- | --- | no oscillations detected")
+    if savefig:
+        os.makedirs("../figures", exist_ok=True)
+        datet = datetime.now().strftime("%y%m%d_%H%M%S")
+        save_path = f"../figures/freq_amp_vs_hext_{datet}.pdf"
+        plt.savefig(save_path, transparent=True, bbox_inches='tight', dpi=300, format='pdf')
+        print(f"figure saved at {save_path}")
+    
+    return fit_results
+
+def plot_freq_amp_vs_hext(freq_arr, amp_arr, h_ext_lower, h_ext_upper, points, fit_results, savefig=False):
+
+    population_colors = ['#35322F', '#3FA4BC', '#EA9523', '#F2948F']
+    population_labels = ['E', 'P', 'S', 'V']
+    
+    h_ext_range = np.linspace(np.linalg.norm(h_ext_lower), np.linalg.norm(h_ext_upper), points)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12,12))
+    
+    for i, (color, label) in enumerate(zip(population_colors,population_labels)):
+        mask = ~np.isnan(freq_arr[:, i])
+        if np.any(mask):
+            ax1.plot(h_ext_range[mask], freq_arr[mask, i], color=color, label=label, linewidth=2, alpha=0.7)
+    
+    ax1.set_ylabel('frequency (hz)')
+    ax1.set_xticklabels([])
+    ax1.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    fig.suptitle('frequency, amplitude, and amp squared vs external input')
+    
+    def sqrt_fit_func(x, k, x_c):
+        result = np.zeros_like(x)
+        mask = x > x_c
+        if np.any(mask):
+            result[mask] = k * np.sqrt(x[mask] - x_c)
+        return result
+    
+    for i, (color, label) in enumerate(zip(population_colors, population_labels)):
+        ax2.plot(h_ext_range, amp_arr[:, i], color=color, label=label, linewidth=2, alpha=0.7)
+        
+        if fit_results['params'][i] is not None:
+            k, x_c = fit_results['params'][i]
+            start_idx = fit_results['start_idx']
+            end_idx = fit_results['end_idx']
+            x_smooth = np.linspace(h_ext_range[start_idx], h_ext_range[end_idx], 100)
+            y_smooth = sqrt_fit_func(x_smooth, k, x_c)
+            
+            if 'r_squared' in fit_results and fit_results['r_squared'][i] is not None:
+                fit_label = f"sqrt fit"
+            else:
+                fit_label = ""
+            
+            ax2.plot(x_smooth, y_smooth, 'r--', linewidth=1.5, alpha=0.8, label=fit_label if i == 0 else "")
+            ax2.scatter([x_c], [0], color='red', s=20, zorder=10)
+            
+            if i == 0: 
+                ax1.axvline(x=x_c, color='gray', linestyle='-', alpha=0.5, linewidth=1)
+                ax2.axvline(x=x_c, color='gray', linestyle='-', alpha=0.5, linewidth=1, label='bifurcation point')
+                ax3.axvline(x=x_c, color='gray', linestyle='-', alpha=0.5, linewidth=1)
+
+    ax2.set_ylabel('amplitude')
+    ax2.set_xticklabels([])
+    ax2.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    for i, (color, label) in enumerate(zip(population_colors, population_labels)):
+        ax3.plot(h_ext_range, amp_arr[:, i]**2, color=color, label=label, linewidth=2, alpha=0.7)
+        if fit_results['params'][i] is not None:
+            k, x_c = fit_results['params'][i]
+            
+            start_idx = fit_results['start_idx']
+            end_idx = fit_results['end_idx']
+            x_smooth = np.linspace(h_ext_range[start_idx], h_ext_range[end_idx], 100)
+            mask = x_smooth > x_c
+            y_smooth = np.zeros_like(x_smooth)
+            y_smooth[mask] = k**2 * (x_smooth[mask] - x_c)
+            
+            fit_label = r"linear fit ($A^2$)"
+            ax3.plot(x_smooth, y_smooth, 'r--', linewidth=1.5, alpha=0.8, label=fit_label if i == 0 else "")
+            ax3.scatter([x_c], [0], color='red', s=20, zorder=10)
+    
+    ax3.set_ylabel('squared amplitude')
+    ax3.set_xlabel('|h_ext|')
+    ax3.spines['top'].set_visible(False)
+    ax3.spines['right'].set_visible(False)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    if np.any(~np.isnan(amp_arr)):
+        y_max = np.nanmax(amp_arr) * 1.1 
+        y_min = -0.05 * y_max 
+        ax2.set_ylim(y_min, y_max)
+    
+    plt.tight_layout()
+    
+    if savefig:
+        os.makedirs("../figures", exist_ok=True)
+        datet = datetime.now().strftime("%y%m%d_%H%M%S")
+        save_path = f"../figures/freq_amp_vs_hext_{datet}.pdf"
+        plt.savefig(save_path, transparent=True, bbox_inches='tight', dpi=300, format='pdf')
+        print(f"figure saved at {save_path}")
+    
+    return fig, (ax1, ax2, ax3)
+
+def plot_squared_amplitude(freq_arr, amp_arr, h_ext_lower, h_ext_upper, points, fit_results, savefig=False):
+    population_colors = ['#35322F', '#3FA4BC', '#EA9523', '#F2948F']
+    population_labels = ['E', 'P', 'S', 'V']
+    
+    h_ext_range = np.linspace(np.linalg.norm(h_ext_lower), np.linalg.norm(h_ext_upper), points)
+    fig, ax = plt.subplots(figsize=(12,6))
+    
+    for i, (color, label) in enumerate(zip(population_colors, population_labels)):
+        ax.plot(h_ext_range, amp_arr[:, i]**2, color=color, label=label, linewidth=2, alpha=0.7)
+        if fit_results['params'][i] is not None:
+            params, model_type = fit_results['params'][i]
+            if fit_results.get('start_idx') is not None and fit_results.get('end_idx') is not None:
+                start_idx = fit_results['start_idx']
+                end_idx = fit_results['end_idx']
+                x_smooth = np.linspace(h_ext_range[start_idx], h_ext_range[end_idx], 100)
+                k, x_c = params
+                y_smooth = np.zeros_like(x_smooth)
+                mask = x_smooth > x_c
+                y_smooth[mask] = k**2 * (x_smooth[mask] - x_c)
+                    
+                fit_label = "linear fit (squared)" if model_type == "sqrt" else "composite fit (squared)"
+                ax.plot(x_smooth, y_smooth, 'r--', linewidth=1.5, alpha=0.8, label=fit_label if i == 0 else "")
+                
+                if model_type == "sqrt":
+                    ax.scatter([x_c], [0], color='red', s=20, zorder=10, label='bifurcation point')
+    
+    ax.set_ylabel('amplitude squared (A²)')
+    ax.set_xlabel('|h_ext|')
+    ax.set_title('amplitude squared vs parameter (linear suggests supercritical hopf)')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if savefig:
+        os.makedirs("../figures", exist_ok=True)
+        datet = datetime.now().strftime("%y%m%d_%H%M%S")
+        save_path = f"../figures/freq_amp_vs_hext_{datet}.pdf"
+        plt.savefig(save_path, transparent=True, bbox_inches='tight', dpi=300, format='pdf')
+        print(f"figure saved at {save_path}")
+    
+    return fig, ax
+
+def get_freq_amp(r_trajectory, dt, threshold_factor, min_peak_distance, start_skip_fraction):
+    n_samples = r_trajectory.shape[0]
+    start_idx = int(start_skip_fraction * n_samples)
+    data = r_trajectory[start_idx:, :]
+
+    f_list = []
+    a_list = []
+    eps = threshold_factor * np.max(r_trajectory)
+    
+    for col in range(4):
+        timeseries = data[:, col]
+        amplitude = (np.max(timeseries) - np.min(timeseries)) / 2
+        a_list.append(amplitude)
+        if amplitude > eps:
+            detrended = scipy.signal.detrend(timeseries)
+            peaks, _ = scipy.signal.find_peaks(detrended, distance=min_peak_distance)
+            if len(peaks) >= 2:
+                avg_peak_distance = dt * np.mean(np.diff(peaks))
+                frequency = 1 / avg_peak_distance
+                f_list.append(frequency)
+            else:
+                f_list.append(None) # not enough peaks
+        else:
+            f_list.append(0)
+    
+    return f_list, a_list
+
+
+def get_freq_amp_arrays(r_fp, params, contrast, TAU, T, dt, h_ext_lower, h_ext_upper, points, 
+                        init_perturb_mag, variable='rate', threshold_factor=0.001, min_peak_distance=10, start_skip_fraction=0.1):
+    W, h1, h0 = params
+    h_ext_range = np.linspace(h_ext_lower, h_ext_upper, points)
+    freq_arr = np.full((points, 4), np.nan)
+    amp_arr = np.full((points, 4), np.nan)
+
+    r_fp_1 = r_fp
+    for i, h_ext in enumerate(h_ext_range):
+        h_tot = h1 * contrast + h0 + h_ext
+        r_fp, _ = get_ss(r_fp_1, W, h1, h0, contrast)
+        r_trajectory, *_ = sim_global(r_fp, init_perturb_mag, W, h_tot, TAU, variable, T_sim=T, dt=dt)
+        freq_arr[i], amp_arr[i] = get_freq_amp(r_trajectory, dt, threshold_factor, min_peak_distance, start_skip_fraction)
+        r_fp_1 = r_fp
+
+    return freq_arr, amp_arr
