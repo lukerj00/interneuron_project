@@ -53,4 +53,3 @@ luke.johnston00@gmail.com
 
 ## Upcoming changes
 -improved docs
--hopf analysis notebook
